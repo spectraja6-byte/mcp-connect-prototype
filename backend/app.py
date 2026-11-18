@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route, Mount
@@ -40,15 +42,28 @@ STARTED_AT = time.time()
 # Path to the built frontend (Vite outputs to ../dist relative to backend/).
 DIST_DIR = Path(os.environ.get("MCP_CONNECT_DIST_DIR", Path(__file__).resolve().parent.parent / "dist"))
 
-CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
+# CORS is restricted to an explicit allowlist. By default NO cross-origin
+# access is granted: the bundled frontend is served by this bridge (same
+# origin) and the Vite dev server proxies /api (also same origin to the
+# browser), so neither needs CORS. To allow another trusted origin, set a
+# comma-separated list, e.g.
+#   MCP_CONNECT_CORS_ORIGINS="http://localhost:5173,https://app.example.com"
+# A wildcard ("*") is rejected on purpose.
+def _load_cors_origins() -> list[str]:
+    raw = os.environ.get("MCP_CONNECT_CORS_ORIGINS", "")
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    if "*" in origins:
+        raise RuntimeError(
+            "MCP_CONNECT_CORS_ORIGINS must list explicit origins; '*' is not allowed."
+        )
+    return origins
+
+
+CORS_ORIGINS = _load_cors_origins()
 
 
 def _json(body: Any, status: int = 200) -> JSONResponse:
-    return JSONResponse(body, status_code=status, headers=CORS)
+    return JSONResponse(body, status_code=status)
 
 
 async def _mcp_call(fn: Callable[[ClientSession], Awaitable[Any]]) -> Any:
@@ -140,10 +155,6 @@ async def api_invoke(request: Request) -> Response:
         return _json({"ok": False, "error": str(exc)}, status=502)
 
 
-async def cors_preflight(_: Request) -> Response:
-    return Response("", headers=CORS)
-
-
 async def spa_fallback(request: Request) -> Response:
     """Serve index.html for any non-API GET request (SPA routing)."""
     index = DIST_DIR / "index.html"
@@ -158,7 +169,6 @@ routes: list[Any] = [
     Route("/api/status", api_status, methods=["GET"]),
     Route("/api/tools", api_tools, methods=["GET"]),
     Route("/api/invoke", api_invoke, methods=["POST"]),
-    Route("/{path:path}", cors_preflight, methods=["OPTIONS"]),
 ]
 
 # Mount static assets if the dist directory exists.
@@ -167,14 +177,24 @@ if DIST_DIR.exists():
     routes.append(Route("/", spa_fallback, methods=["GET"]))
     routes.append(Route("/{path:path}", spa_fallback, methods=["GET"]))
 
-app = Starlette(routes=routes)
+app = Starlette(
+    routes=routes,
+    middleware=[
+        Middleware(
+            CORSMiddleware,
+            allow_origins=CORS_ORIGINS,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type"],
+        )
+    ],
+)
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
         "app:app",
-        host=os.environ.get("MCP_CONNECT_HOST", "0.0.0.0"),
+        host=os.environ.get("MCP_CONNECT_HOST", "127.0.0.1"),
         port=int(os.environ.get("MCP_CONNECT_PORT", "8000")),
         reload=False,
     )
