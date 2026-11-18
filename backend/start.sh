@@ -23,8 +23,9 @@ echo "MCP server  -> http://127.0.0.1:8001/mcp  (PID $!)"
 sleep 2
 
 # Start REST bridge (serves /health, /api/*, and static frontend, port 8000).
+# Binds to 127.0.0.1 by default; it has NO authentication (see README, Security).
 nohup python3 app.py > /tmp/rest_bridge.log 2>&1 &
-echo "REST bridge -> http://0.0.0.0:8000        (PID $!)"
+echo "REST bridge -> http://127.0.0.1:8000      (PID $!)"
 
 sleep 2
 echo
