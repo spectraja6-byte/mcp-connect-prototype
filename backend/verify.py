@@ -8,19 +8,30 @@ Checks, in order:
  5. Direct MCP client connection (bypassing the REST bridge) to /mcp,
     to prove the bridge is not a shortcut around the protocol.
 
-Run:  python3 backend/verify.py [base_url]
+Run:  python3 backend/verify.py [bridge_base_url]
+
+Configuration (no hardcoded ports):
+  bridge base URL  argv[1], else $MCP_CONNECT_BASE_URL, else http://127.0.0.1:8000
+  MCP server URL   $MCP_CONNECT_MCP_URL (same variable the bridge uses),
+                   else http://127.0.0.1:8001/mcp
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 
 import httpx
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000").rstrip("/")
+BASE = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else os.environ.get("MCP_CONNECT_BASE_URL", "http://127.0.0.1:8000")
+).rstrip("/")
+MCP_URL = os.environ.get("MCP_CONNECT_MCP_URL", "http://127.0.0.1:8001/mcp")
 
 
 def section(title: str) -> None:
@@ -96,10 +107,9 @@ async def main() -> int:
 
     # 5. Direct MCP client — bypass the REST bridge entirely.
     #    Talk straight to the MCP server's /mcp endpoint.
-    mcp_base = BASE.replace(":8000", ":8001")
-    section(f"5. Direct MCP client over Streamable HTTP (bypassing bridge)")
+    section(f"5. Direct MCP client over Streamable HTTP (bypassing bridge) -> {MCP_URL}")
     try:
-        async with streamable_http_client(f"{mcp_base}/mcp") as (read, write):
+        async with streamable_http_client(MCP_URL) as (read, write):
             async with ClientSession(read, write) as session:
                 init = await session.initialize()
                 print(f"  initialized: protocol={init.protocol_version}, "
