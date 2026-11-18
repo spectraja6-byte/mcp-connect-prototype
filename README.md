@@ -57,6 +57,31 @@ src/
   lib/types.ts       Shared TypeScript types
 ```
 
+## Security — read before deploying
+
+**This prototype has NO authentication.** Neither the REST bridge (`/api/*`)
+nor the MCP server (`/mcp`) verifies who is calling, and `/api/invoke` executes
+MCP tools on behalf of any caller that can reach it.
+
+- **Authentication and authorization are required before any production or
+  public deployment.** Do not expose either port to the internet or an
+  untrusted network until they are implemented.
+- Both processes bind to `127.0.0.1` by default. Keep it that way for local
+  development. Changing `MCP_CONNECT_HOST` / `MCP_SERVER_HOST` to a public
+  interface is unsafe without authentication in front.
+- **CORS is deny-by-default.** No cross-origin access is granted unless you list
+  trusted origins explicitly. A wildcard `*` is rejected at startup.
+
+### Configuration
+
+| Variable                    | Used by            | Default                      | Purpose |
+|-----------------------------|--------------------|------------------------------|---------|
+| `MCP_CONNECT_CORS_ORIGINS`  | bridge             | *(empty — no CORS)*          | Comma-separated trusted origins, e.g. `http://localhost:5173` |
+| `MCP_CONNECT_HOST` / `MCP_CONNECT_PORT` | bridge | `127.0.0.1` / `8000`         | Bridge bind address |
+| `MCP_SERVER_HOST` / `MCP_SERVER_PORT`   | MCP server | `127.0.0.1` / `8001`     | MCP server bind address |
+| `MCP_CONNECT_MCP_URL`       | bridge, verify.py  | `http://127.0.0.1:8001/mcp`  | Where the bridge/verifier reach the MCP server |
+| `MCP_CONNECT_BASE_URL`      | verify.py          | `http://127.0.0.1:8000`      | Bridge URL to verify (or pass as argv[1]) |
+
 ## Technology and dependencies
 
 | Layer    | Stack                                      |
@@ -101,6 +126,9 @@ python3 app.py                     # serves /health + /api/* on http://127.0.0.1
 ```bash
 cd backend
 python3 verify.py                  # runs 5 checks, expects 5/5 PASS
+
+# Non-default ports / hosts:
+MCP_CONNECT_MCP_URL=http://127.0.0.1:9001/mcp python3 verify.py http://127.0.0.1:9000
 ```
 
 ### 3. Frontend
@@ -148,12 +176,13 @@ Frontend: `npm run build` and `npm run typecheck` both pass.
 - The Python venv module (`python3-venv`) is not installable in this sandbox
   without root, so `mcp` was installed with `pip --break-system-packages`.
   In a normal environment, use a virtualenv: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
-- The frontend dev server and backend run on different ports; CORS headers are
-  set on the bridge and a Vite proxy is configured for local dev.
+- The frontend dev server and backend run on different ports; local dev uses the
+  Vite proxy (`vite.config.ts`), so no CORS is needed. CORS is deny-by-default
+  (see Security).
 
 ## Outstanding work
 
 - Add more MCP tools beyond `hello_mcp` (the architecture supports them).
-- Add authentication to the MCP server / REST bridge.
+- **Add authentication to the MCP server / REST bridge (required before production).**
 - Add automated frontend tests.
 - Containerize the backend for reproducible deployment.
