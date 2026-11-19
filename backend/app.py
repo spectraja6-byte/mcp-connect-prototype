@@ -7,7 +7,8 @@ transport) that connects to the separate MCP server process. Nothing is mocked.
 The bridge also serves the built frontend's static files so that the browser
 and the API share a single origin — no cross-port proxy needed in production.
 
-Endpoints:
+Endpoints (everything under /api requires "Authorization: Bearer <token>",
+see auth.py; /health and the static frontend are public):
   GET  /health        — liveness, HTTP 200
   GET  /api/status    — server info + live MCP connection check
   GET  /api/tools     — discover MCP tools via tools/list
@@ -30,9 +31,11 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route, Mount
 from starlette.staticfiles import StaticFiles
 
+import httpx2  # HTTP client type the MCP SDK's streamable_http_client expects (installed with `mcp`)
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from auth import BearerAuthMiddleware, load_token
 from mcp_server import server as mcp_server
 
 # The MCP server runs as a separate process on its own port. Default 8001.
@@ -61,6 +64,10 @@ def _load_cors_origins() -> list[str]:
 
 CORS_ORIGINS = _load_cors_origins()
 
+# Shared bearer token (see auth.py). The bridge requires it on /api/* and also
+# presents it to the MCP server, which enforces it independently.
+API_TOKEN = load_token()
+
 
 def _json(body: Any, status: int = 200) -> JSONResponse:
     return JSONResponse(body, status_code=status)
@@ -68,10 +75,14 @@ def _json(body: Any, status: int = 200) -> JSONResponse:
 
 async def _mcp_call(fn: Callable[[ClientSession], Awaitable[Any]]) -> Any:
     """Open a real MCP client session over Streamable HTTP and run fn(session)."""
-    async with streamable_http_client(MCP_URL) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            return await fn(session)
+    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else None
+    async with httpx2.AsyncClient(
+        headers=headers, timeout=httpx2.Timeout(30.0, read=300.0)
+    ) as http_client:
+        async with streamable_http_client(MCP_URL, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return await fn(session)
 
 
 async def health(_: Request) -> Response:
@@ -184,8 +195,16 @@ app = Starlette(
             CORSMiddleware,
             allow_origins=CORS_ORIGINS,
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["Content-Type"],
-        )
+            allow_headers=["Content-Type", "Authorization"],
+        ),
+        # Inside CORS so that 401/503 responses still carry CORS headers and
+        # preflight (OPTIONS) requests, which cannot carry credentials, are
+        # answered by CORS before authentication is checked.
+        Middleware(
+            BearerAuthMiddleware,
+            token=API_TOKEN,
+            protect=lambda path: path == "/api" or path.startswith("/api/"),
+        ),
     ],
 )
 
