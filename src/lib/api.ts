@@ -1,4 +1,3 @@
-
 import type {
   StatusResponse,
   ToolsResponse,
@@ -14,6 +13,7 @@ export class AuthError extends Error {
     this.name = 'AuthError';
   }
 }
+
 function readStoredToken(): string | null {
   try {
     return sessionStorage.getItem(TOKEN_KEY);
@@ -27,6 +27,7 @@ let token: string | null = readStoredToken();
 export function hasToken(): boolean {
   return token !== null;
 }
+
 /**
  * Remember the access token for this browser tab only (sessionStorage, cleared
  * when the tab closes). Pass an empty value to forget it.
@@ -41,6 +42,7 @@ export function setToken(value: string): void {
     /* storage unavailable: keep in memory only */
   }
 }
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -55,12 +57,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   const contentType = res.headers.get('content-type') ?? '';
+
   if (!contentType.includes('application/json')) {
     if (!res.ok) {
       throw new Error(`Backend unreachable (HTTP ${res.status}). The MCP Connect backend is not running.`);
     }
     throw new Error('Backend returned a non-JSON response. The MCP Connect backend is not running.');
   }
+
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -81,6 +85,7 @@ export function fetchStatus(): Promise<StatusResponse> {
 export function fetchTools(): Promise<ToolsResponse> {
   return request<ToolsResponse>('/api/tools');
 }
+
 export function invokeTool(
   name: string,
   args: Record<string, unknown>,
@@ -100,4 +105,3 @@ export async function fetchHealth(): Promise<boolean> {
     return false;
   }
 }
-
