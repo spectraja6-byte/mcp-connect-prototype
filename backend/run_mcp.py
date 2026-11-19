@@ -5,9 +5,13 @@ import os
 
 import uvicorn
 
+from auth import BearerAuthMiddleware, load_token
 from mcp_server import server as mcp_server
 
 app = mcp_server.streamable_http_app(streamable_http_path="/mcp")
+
+# Every path on the MCP server requires the shared bearer token (see auth.py).
+app.add_middleware(BearerAuthMiddleware, token=load_token(), protect=lambda _path: True)
 
 if __name__ == "__main__":
     uvicorn.run(

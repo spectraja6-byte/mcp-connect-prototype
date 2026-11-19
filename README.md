@@ -49,7 +49,9 @@ backend/
   mcp_server.py      MCP server + hello_mcp tool definition (official MCP SDK)
   run_mcp.py         Entrypoint: serves the MCP /mcp endpoint on :8001
   app.py             REST bridge: /health, /api/status, /api/tools, /api/invoke on :8000
-  verify.py          Independent verification script (5 checks)
+  auth.py            Shared bearer-token middleware used by both processes
+  verify.py          Independent verification script (5 checks; needs the token)
+  test_auth.py       Authentication tests (starts its own throwaway backends)
   requirements.txt   Python dependencies
 src/
   App.tsx            Dashboard: status, server info, tools, execution, response
@@ -59,16 +61,25 @@ src/
 
 ## Security — read before deploying
 
-**This prototype has NO authentication.** Neither the REST bridge (`/api/*`)
-nor the MCP server (`/mcp`) verifies who is calling, and `/api/invoke` executes
-MCP tools on behalf of any caller that can reach it.
+**Authentication is a first step, not production-ready.** The REST bridge
+(`/api/*`) and the MCP server (`/mcp`) each require a shared bearer token:
+`Authorization: Bearer <token>`, taken from `MCP_CONNECT_API_TOKEN`.
 
-- **Authentication and authorization are required before any production or
-  public deployment.** Do not expose either port to the internet or an
-  untrusted network until they are implemented.
+- It fails closed. With no token configured, protected paths answer **503**; a
+  token shorter than 16 characters stops the process from starting; a missing
+  or wrong token gets **401**. Tokens are compared in constant time and never
+  logged or echoed.
+- Public by design: `/health` and the static frontend (so the page can load and
+  ask for the token). Everything under `/api/` and all of `/mcp` is protected.
+- This is one shared secret with no users, roles, expiry or rotation, and no
+  TLS. **Per-user authentication/authorization, TLS and rate limiting are still
+  required before any production or public deployment.** Do not expose either
+  port to the internet or an untrusted network until then.
 - Both processes bind to `127.0.0.1` by default. Keep it that way for local
   development. Changing `MCP_CONNECT_HOST` / `MCP_SERVER_HOST` to a public
-  interface is unsafe without authentication in front.
+  interface is unsafe without TLS and stronger authentication in front.
+- The frontend asks for the token when the backend answers 401 and keeps it for
+  that browser tab only (`sessionStorage`).
 - **CORS is deny-by-default.** No cross-origin access is granted unless you list
   trusted origins explicitly. A wildcard `*` is rejected at startup.
 
@@ -76,6 +87,7 @@ MCP tools on behalf of any caller that can reach it.
 
 | Variable                    | Used by            | Default                      | Purpose |
 |-----------------------------|--------------------|------------------------------|---------|
+| `MCP_CONNECT_API_TOKEN`     | bridge, MCP server, verify.py | *(unset — protected paths return 503)* | Shared bearer token, at least 16 characters. Use the same value for both processes. Generate one with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `MCP_CONNECT_CORS_ORIGINS`  | bridge             | *(empty — no CORS)*          | Comma-separated trusted origins, e.g. `http://localhost:5173` |
 | `MCP_CONNECT_HOST` / `MCP_CONNECT_PORT` | bridge | `127.0.0.1` / `8000`         | Bridge bind address |
 | `MCP_SERVER_HOST` / `MCP_SERVER_PORT`   | MCP server | `127.0.0.1` / `8001`     | MCP server bind address |
@@ -114,6 +126,9 @@ No paid services. No database required for this prototype.
 cd backend
 pip install -r requirements.txt   # or: pip install "mcp[cli]" uvicorn starlette httpx
 
+# Both processes (and verify.py) need the same token. Do not commit it.
+export MCP_CONNECT_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
 # Terminal 1 — start the MCP server
 python3 run_mcp.py                 # serves /mcp on http://127.0.0.1:8001
 
@@ -125,7 +140,8 @@ python3 app.py                     # serves /health + /api/* on http://127.0.0.1
 
 ```bash
 cd backend
-python3 verify.py                  # runs 5 checks, expects 5/5 PASS
+python3 verify.py                  # runs 5 checks, expects 5/5 PASS (needs MCP_CONNECT_API_TOKEN)
+python3 test_auth.py               # authentication tests (own throwaway backends; token not needed)
 
 # Non-default ports / hosts:
 MCP_CONNECT_MCP_URL=http://127.0.0.1:9001/mcp python3 verify.py http://127.0.0.1:9000
@@ -183,6 +199,6 @@ Frontend: `npm run build` and `npm run typecheck` both pass.
 ## Outstanding work
 
 - Add more MCP tools beyond `hello_mcp` (the architecture supports them).
-- **Add authentication to the MCP server / REST bridge (required before production).**
+- **Replace the shared bearer token with per-user authentication/authorization, add TLS and rate limiting (required before production).**
 - Add automated frontend tests.
 - Containerize the backend for reproducible deployment.

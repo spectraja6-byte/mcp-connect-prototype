@@ -12,7 +12,14 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
-import { fetchStatus, fetchTools, invokeTool } from '@/lib/api';
+import {
+  AuthError,
+  fetchStatus,
+  fetchTools,
+  hasToken,
+  invokeTool,
+  setToken,
+} from '@/lib/api';
 import type {
   InvokeResponse,
   McpTool,
@@ -36,6 +43,8 @@ export default function App() {
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [loadingTools, setLoadingTools] = useState(false);
 
+  const [needsToken, setNeedsToken] = useState(false);
+
   const [nameInput, setNameInput] = useState('world');
   const [invoke, setInvoke] = useState<InvokeState>({
     loading: false,
@@ -54,6 +63,7 @@ export default function App() {
         setStatusError(data.mcp?.error ?? 'MCP server not reachable');
       }
     } catch (err) {
+      if (err instanceof AuthError) setNeedsToken(true);
       setConnState('disconnected');
       setStatusError(err instanceof Error ? err.message : String(err));
     }
@@ -71,12 +81,23 @@ export default function App() {
         setTools(data.tools);
       }
     } catch (err) {
+      if (err instanceof AuthError) setNeedsToken(true);
       setToolsError(err instanceof Error ? err.message : String(err));
       setTools([]);
     } finally {
       setLoadingTools(false);
     }
   }, []);
+
+  const submitToken = useCallback(
+    (value: string) => {
+      setToken(value);
+      setNeedsToken(false);
+      refreshStatus();
+      refreshTools();
+    },
+    [refreshStatus, refreshTools],
+  );
 
   useEffect(() => {
     refreshStatus();
@@ -89,6 +110,7 @@ export default function App() {
       const res = await invokeTool('hello_mcp', { name: nameInput });
       setInvoke({ loading: false, response: res, error: null });
     } catch (err) {
+      if (err instanceof AuthError) setNeedsToken(true);
       setInvoke({
         loading: false,
         response: null,
@@ -109,6 +131,9 @@ export default function App() {
       <Header connected={connected} onRefresh={refreshStatus} />
 
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+        {needsToken && (
+          <TokenPanel rejected={hasToken()} onSubmit={submitToken} />
+        )}
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Connection status */}
           <Section
@@ -219,6 +244,55 @@ export default function App() {
         </footer>
       </main>
     </div>
+  );
+}
+
+function TokenPanel({
+  rejected,
+  onSubmit,
+}: {
+  rejected: boolean;
+  onSubmit: (value: string) => void;
+}) {
+  const [value, setValue] = useState('');
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (value.trim()) onSubmit(value);
+      }}
+      className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+    >
+      <h2 className="text-sm font-semibold text-slate-800">
+        Access token required
+      </h2>
+      <p className="mt-1 text-xs text-slate-500">
+        This backend requires an access token. It is kept for this browser tab
+        only and is sent as a bearer token with each request.
+      </p>
+      {rejected && (
+        <p className="mt-2 rounded-md bg-error-50 px-3 py-2 text-xs text-error-700">
+          The token was rejected. Check it and try again.
+        </p>
+      )}
+      <div className="mt-3 flex gap-2">
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="access token"
+          autoComplete="off"
+          className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
+        />
+        <button
+          type="submit"
+          disabled={!value.trim()}
+          className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Unlock
+        </button>
+      </div>
+    </form>
   );
 }
 

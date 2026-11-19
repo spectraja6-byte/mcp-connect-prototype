@@ -14,6 +14,9 @@ Configuration (no hardcoded ports):
   bridge base URL  argv[1], else $MCP_CONNECT_BASE_URL, else http://127.0.0.1:8000
   MCP server URL   $MCP_CONNECT_MCP_URL (same variable the bridge uses),
                    else http://127.0.0.1:8001/mcp
+  access token     $MCP_CONNECT_API_TOKEN — sent as "Authorization: Bearer <token>"
+                   to both the bridge and the MCP server. Must match the token
+                   the backends were started with.
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import os
 import sys
 
 import httpx
+import httpx2  # client type the MCP SDK's streamable_http_client expects (installed with `mcp`)
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -32,6 +36,8 @@ BASE = (
     else os.environ.get("MCP_CONNECT_BASE_URL", "http://127.0.0.1:8000")
 ).rstrip("/")
 MCP_URL = os.environ.get("MCP_CONNECT_MCP_URL", "http://127.0.0.1:8001/mcp")
+TOKEN = os.environ.get("MCP_CONNECT_API_TOKEN", "").strip()
+AUTH_HEADERS = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
 
 def section(title: str) -> None:
@@ -46,7 +52,7 @@ def result(ok: bool, detail: str) -> str:
 
 async def main() -> int:
     flags: list[str] = []
-    async with httpx.AsyncClient(base_url=BASE, timeout=15.0) as http:
+    async with httpx.AsyncClient(base_url=BASE, timeout=15.0, headers=AUTH_HEADERS) as http:
         # 1. Health
         section("1. Health endpoint")
         try:
@@ -109,22 +115,25 @@ async def main() -> int:
     #    Talk straight to the MCP server's /mcp endpoint.
     section(f"5. Direct MCP client over Streamable HTTP (bypassing bridge) -> {MCP_URL}")
     try:
-        async with streamable_http_client(MCP_URL) as (read, write):
-            async with ClientSession(read, write) as session:
-                init = await session.initialize()
-                print(f"  initialized: protocol={init.protocol_version}, "
-                      f"server={init.server_info.name} v{init.server_info.version}")
-                tools = (await session.list_tools()).tools
-                print(f"  tools: {[t.name for t in tools]}")
-                call = await session.call_tool("hello_mcp", {"name": "Direct"})
-                text = next(
-                    (b.text for b in call.content if hasattr(b, "text")), ""
-                )
-                flags.append(result(
-                    "hello_mcp" in [t.name for t in tools]
-                    and "Hello, Direct" in text,
-                    f"direct call response: {text!r}",
-                ))
+        async with httpx2.AsyncClient(
+            headers=AUTH_HEADERS, timeout=httpx2.Timeout(30.0, read=300.0)
+        ) as mcp_http:
+            async with streamable_http_client(MCP_URL, http_client=mcp_http) as (read, write):
+                async with ClientSession(read, write) as session:
+                    init = await session.initialize()
+                    print(f"  initialized: protocol={init.protocol_version}, "
+                          f"server={init.server_info.name} v{init.server_info.version}")
+                    tools = (await session.list_tools()).tools
+                    print(f"  tools: {[t.name for t in tools]}")
+                    call = await session.call_tool("hello_mcp", {"name": "Direct"})
+                    text = next(
+                        (b.text for b in call.content if hasattr(b, "text")), ""
+                    )
+                    flags.append(result(
+                        "hello_mcp" in [t.name for t in tools]
+                        and "Hello, Direct" in text,
+                        f"direct call response: {text!r}",
+                    ))
     except Exception as exc:
         flags.append(result(False, f"direct MCP client failed: {exc}"))
 
