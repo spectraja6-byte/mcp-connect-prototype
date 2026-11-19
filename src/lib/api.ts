@@ -4,8 +4,58 @@ import type {
   InvokeResponse,
 } from './types';
 
+const TOKEN_KEY = 'mcp-connect-token';
+
+/** Thrown when the backend answers 401: a (valid) access token is required. */
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+function readStoredToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null; // storage unavailable: token then lives in memory only
+  }
+}
+
+let token: string | null = readStoredToken();
+
+export function hasToken(): boolean {
+  return token !== null;
+}
+
+/**
+ * Remember the access token for this browser tab only (sessionStorage, cleared
+ * when the tab closes). Pass an empty value to forget it.
+ */
+export function setToken(value: string): void {
+  const cleaned = value.trim();
+  token = cleaned === '' ? null : cleaned;
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable: keep in memory only */
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(url, { ...init, headers });
+
+  if (res.status === 401) {
+    throw new AuthError(
+      token
+        ? 'The access token was rejected. Enter the correct token.'
+        : 'An access token is required.',
+    );
+  }
+
   const contentType = res.headers.get('content-type') ?? '';
 
   if (!contentType.includes('application/json')) {
